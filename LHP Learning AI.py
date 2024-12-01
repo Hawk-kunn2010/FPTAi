@@ -1,58 +1,141 @@
 import streamlit as st
-from langchain_community.chat_models import ChatOpenAI
-from langchain_community.embeddings import OpenAIEmbeddings
+from langchain.chat_models import ChatOpenAI
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.schema import HumanMessage
 from PyPDF2 import PdfReader
+import pandas as pd
+from io import StringIO
+import docx
 import os
+import matplotlib.pyplot as plt
 
 # API key
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Giao diện
-st.title("LHP Learning AI")
-st.write("Please enter code here:")
+# Cấu hình giao diện Streamlit
+st.set_page_config(
+    page_title="LHP AI Chatbot",
+    page_icon="new_icon.png",  # File icon tùy chỉnh
+    layout="wide"
+)
 
-# Hàm chuyển số nhúng
-def embed_question(question: str, embeddings_model):
-    """Chuyển đổi câu hỏi thành vector nhúng."""
-    embedding = embeddings_model.embed_query(question)
-    return embedding
+# Giao diện chính
+st.title("LHP AI Chatbot")
+st.write("Ask questions directly, or upload files for additional context.")
 
-# Tạo mô hình nhúng
-embeddings_model = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-
-if "response" not in st.session_state:
-    st.session_state["response"] = ""
-
-# đọc nội dung từ file PDF
+# Hàm đọc nội dung file
 def read_pdf(file):
-    """Đọc nội dung từ file PDF và trả về văn bản."""
     pdf_reader = PdfReader(file)
     text = ""
     for page in pdf_reader.pages:
         text += page.extract_text()
     return text
 
-# Nhập câu hỏi từ người dùng
+def read_txt(file):
+    stringio = StringIO(file.getvalue().decode("utf-8"))
+    return stringio.read()
+
+def read_docx(file):
+    doc = docx.Document(file)
+    text = ""
+    for paragraph in doc.paragraphs:
+        text += paragraph.text + "\n"
+    return text
+
+def read_excel(file):
+    """Đọc nội dung từ file Excel và trả về DataFrame."""
+    return pd.read_excel(file)
+
+# Hàm vẽ biểu đồ
+def plot_chart(data, chart_type, x_column, y_column):
+    """Hàm vẽ biểu đồ dựa trên loại biểu đồ và cột được chọn."""
+    plt.figure(figsize=(10, 6))
+    if chart_type == "Bar Chart":
+        plt.bar(data[x_column], data[y_column])
+        plt.xlabel(x_column)
+        plt.ylabel(y_column)
+        plt.title(f"{chart_type}: {y_column} vs {x_column}")
+    elif chart_type == "Line Chart":
+        plt.plot(data[x_column], data[y_column], marker='o')
+        plt.xlabel(x_column)
+        plt.ylabel(y_column)
+        plt.title(f"{chart_type}: {y_column} vs {x_column}")
+    elif chart_type == "Scatter Plot":
+        plt.scatter(data[x_column], data[y_column])
+        plt.xlabel(x_column)
+        plt.ylabel(y_column)
+        plt.title(f"{chart_type}: {y_column} vs {x_column}")
+
+    st.pyplot(plt)
+
+# Tạo mô hình nhúng
+embeddings_model = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+
+# Lưu trạng thái phản hồi
+if "response" not in st.session_state:
+    st.session_state["response"] = ""
+
+# đặt câu hỏi
 user_question = st.text_input("Type your question here:")
 
-# Cho phép tải lên file PDF
-uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
+# Tải lên file
+uploaded_files = st.file_uploader(
+    "Optional: Upload files (PDF, TXT, DOCX, Excel supported) for context", 
+    type=["pdf", "txt", "docx", "xlsx", "xls"], 
+    accept_multiple_files=True
+)
 
-# Xử lý khi người dùng tải lên file PDF
-if uploaded_file is not None:
-    # Đọc nội dung file PDF
-    file_text = read_pdf(uploaded_file)
-    st.write("File content extracted successfully. You can now ask questions.")
-else:
-    file_text = ""
+# Đọc và kết hợp nội dung từ các file đã tải lên (nếu có)
+file_contents = []
+excel_tables = []
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        if uploaded_file.name.endswith(".pdf"):
+            file_contents.append(read_pdf(uploaded_file))
+        elif uploaded_file.name.endswith(".txt"):
+            file_contents.append(read_txt(uploaded_file))
+        elif uploaded_file.name.endswith(".docx"):
+            file_contents.append(read_docx(uploaded_file))
+        elif uploaded_file.name.endswith((".xlsx", ".xls")):
+            df = read_excel(uploaded_file)  # Lưu DataFrame để hiển thị sau
+            excel_tables.append((uploaded_file.name, df))
+            file_contents.append(df.to_string(index=False))
 
+# Hiển thị thông báo khi xử lý file xong
+if file_contents:
+    st.success("Files uploaded and processed successfully!")
+
+# Hiển thị bảng từ các file Excel và thêm khả năng vẽ biểu đồ
+if excel_tables:
+    st.subheader("Excel Tables:")
+    for name, df in excel_tables:
+        st.write(f"**{name}**")
+        st.dataframe(df)  # Hiển thị bảng Excel
+
+        # Lựa chọn cột và loại biểu đồ
+        st.subheader(f"Visualization for {name}")
+        columns = df.columns.tolist()
+        
+        x_column = st.selectbox("Select X-axis:", columns, key=f"x_{name}")
+        y_column = st.selectbox("Select Y-axis:", columns, key=f"y_{name}")
+        chart_type = st.selectbox(
+            "Select Chart Type:", 
+            ["Bar Chart", "Line Chart", "Scatter Plot"], 
+            key=f"chart_{name}"
+        )
+
+        # Vẽ biểu đồ
+        if st.button(f"Plot Chart for {name}", key=f"plot_{name}"):
+            plot_chart(df, chart_type, x_column, y_column)
+
+# Kết hợp nội dung file vào câu hỏi nếu có
 if st.button("Submit"):
     if user_question.strip():
-        # Chuyển câu hỏi thành mã nhúng
-        embedded_question = embed_question(user_question, embeddings_model)
+        if file_contents:
+            combined_text = "\n".join(file_contents)
+            user_question = f"Based on the uploaded documents:\n{combined_text}\n\n{user_question}"
 
-        # mô hình gpt
+        # Tạo mô hình GPT
         llm = ChatOpenAI(
             openai_api_key=OPENAI_API_KEY,
             temperature=0.7,
@@ -60,13 +143,8 @@ if st.button("Submit"):
             model_name="gpt-3.5-turbo",
         )
 
-        # Kết hợp câu hỏi người dùng và nội dung file PDF
-        if file_text:
-            user_question = f"Based on the document content: {file_text} \n{user_question}"
-
+        # Gửi câu hỏi tới GPT
         input_message = HumanMessage(content=user_question)
-
-        # Gửi câu hỏi tới GPT và nhận phản hồi
         response = llm([input_message])
         st.session_state["response"] = response.content
 
